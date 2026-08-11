@@ -593,6 +593,13 @@ pub fn is_service_ipc_path_exists() -> bool {
     Path::new(clash_verge_service_ipc::IPC_PATH).exists()
 }
 
+fn background_refresh_status(version_mismatch: bool) -> Result<ServiceStatus> {
+    if version_mismatch {
+        bail!("service version mismatch; explicit repair is required")
+    }
+    Ok(ServiceStatus::Ready)
+}
+
 impl ServiceManager {
     pub const fn config() -> clash_verge_service_ipc::IpcConfig {
         clash_verge_service_ipc::IpcConfig {
@@ -645,12 +652,19 @@ impl ServiceManager {
 
     pub async fn refresh(&self) -> Result<()> {
         self.run_operation(async {
-            self.apply_service_status(if clash_verge_service_ipc::is_reinstall_service_needed().await {
-                ServiceStatus::NeedsReinstall
-            } else {
-                ServiceStatus::Ready
-            })
-            .await
+            // Never launch an elevation-driven uninstall/install sequence from
+            // a background core refresh. A package mismatch falls back to
+            // sidecar mode and waits for an explicit Repair.
+            match background_refresh_status(clash_verge_service_ipc::is_reinstall_service_needed().await) {
+                Ok(status) => {
+                    self.set_status(status);
+                    Ok(())
+                }
+                Err(err) => {
+                    self.set_status(ServiceStatus::NeedsReinstall);
+                    Err(err)
+                }
+            }
         })
         .await
     }
@@ -678,10 +692,9 @@ impl ServiceManager {
                 run_service_command(install_service, "install service")?;
                 wait_for_service_ipc(self).await?;
                 if clash_verge_service_ipc::is_reinstall_service_needed().await {
-                    logging!(info, Type::Service, "服务版本不匹配，执行重装流程");
+                    logging!(error, Type::Service, "安装后服务版本仍不匹配");
                     self.set_status(ServiceStatus::NeedsReinstall);
-                    run_service_command(reinstall_service, "reinstall service")?;
-                    wait_for_service_ipc(self).await?;
+                    bail!("installed service version mismatch; repair package required")
                 }
             }
             ServiceStatus::UninstallRequired => {
@@ -708,6 +721,23 @@ pub static SERVICE_MANAGER: Lazy<ServiceManager> = Lazy::new(|| ServiceManager {
     operation_running: AtomicBool::new(false),
     operation_done: Notify::new(),
 });
+
+#[cfg(test)]
+mod background_refresh_tests {
+    use super::*;
+
+    #[test]
+    fn matching_service_is_ready() -> Result<()> {
+        assert_eq!(background_refresh_status(false)?, ServiceStatus::Ready);
+        Ok(())
+    }
+
+    #[test]
+    fn mismatch_requires_manual_repair_without_automatic_reinstall() {
+        let err = background_refresh_status(true).expect_err("mismatch must not be accepted");
+        assert!(err.to_string().contains("explicit repair"));
+    }
+}
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {

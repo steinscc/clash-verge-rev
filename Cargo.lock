@@ -7307,7 +7307,7 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-mihomo"
 version = "0.5.4"
-source = "git+https://github.com/clash-verge-rev/tauri-plugin-mihomo?branch=fix%2Fapi-robustness#cf97ff99e390a9b437d5cf94c6f454f024fc8f69"
+source = "git+https://github.com/steinscc/tauri-plugin-mihomo?rev=77b680b849afc6006da778d1243a4151e1f78d7b#77b680b849afc6006da778d1243a4151e1f78d7b"
 dependencies = [
  "base64 0.22.1",
  "bytes",

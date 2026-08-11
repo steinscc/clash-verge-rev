@@ -1,7 +1,8 @@
 use crate::config::Config;
 use crate::{
     config::{DEFAULT_PAC, deserialize_encrypted, serialize_encrypted},
-    utils::{dirs, help},
+    constants::network::ports::DEFAULT_MIXED,
+    utils::{dirs, help, port},
 };
 use anyhow::Result;
 use clash_verge_logging::{Type, logging};
@@ -319,6 +320,31 @@ impl IVerge {
             needs_fix = true;
         }
 
+        let requested_mixed_port = config.verge_mixed_port.unwrap_or(DEFAULT_MIXED);
+        match port::choose_available_mixed_port(requested_mixed_port) {
+            Ok(available_port) if available_port != requested_mixed_port => {
+                logging!(
+                    warn,
+                    Type::Config,
+                    "Mixed proxy port {} is unavailable; migrating to available loopback port {}",
+                    requested_mixed_port,
+                    available_port
+                );
+                config.verge_mixed_port = Some(available_port);
+                needs_fix = true;
+            }
+            Ok(_) => {}
+            Err(err) => {
+                logging!(
+                    error,
+                    Type::Config,
+                    "Failed to find an available mixed proxy port after {} was unavailable: {}",
+                    requested_mixed_port,
+                    err
+                );
+            }
+        }
+
         // 修正后保存配置
         if needs_fix {
             logging!(info, Type::Config, "正在保存修正后的配置文件...");
@@ -419,7 +445,7 @@ impl IVerge {
             verge_tproxy_port: Some(7896),
             #[cfg(target_os = "linux")]
             verge_tproxy_enabled: Some(false),
-            verge_mixed_port: Some(7897),
+            verge_mixed_port: Some(DEFAULT_MIXED),
             verge_socks_port: Some(7898),
             verge_socks_enabled: Some(false),
             verge_port: Some(7899),
@@ -429,7 +455,10 @@ impl IVerge {
             use_default_bypass: Some(true),
             proxy_guard_duration: Some(30),
             auto_close_connection: Some(true),
-            auto_check_update: Some(true),
+            // This distribution ships a Mihomo sidecar with the privateproxy
+            // adapter. An upstream application update would replace that
+            // sidecar with the stock core, so application updates are opt-in.
+            auto_check_update: Some(false),
             enable_builtin_enhanced: Some(true),
             auto_log_clean: Some(2), // 1: 1天, 2: 7天, 3: 30天, 4: 90天
             enable_auto_backup_schedule: Some(false),

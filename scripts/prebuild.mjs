@@ -2,6 +2,8 @@ import { execFileSync, execSync } from 'child_process'
 import { createHash } from 'crypto'
 import fs from 'fs'
 import fsp from 'fs/promises'
+import http from 'http'
+import https from 'https'
 import path from 'path'
 import zlib from 'zlib'
 
@@ -23,7 +25,10 @@ import { log_debug, log_error, log_info, log_success } from './utils.mjs'
 
 const cwd = process.cwd()
 const TEMP_DIR = path.join(cwd, 'node_modules/.verge')
-const FORCE = process.argv.includes('--force') || process.argv.includes('-f')
+const CLI_ARGS = process.argv.slice(2)
+const SERVICE_ONLY = CLI_ARGS.includes('--service-only')
+const FORCE =
+  SERVICE_ONLY || CLI_ARGS.includes('--force') || CLI_ARGS.includes('-f')
 const VERSION_CACHE_FILE = path.join(TEMP_DIR, '.version_cache.json')
 const HASH_CACHE_FILE = path.join(TEMP_DIR, '.hash_cache.json')
 
@@ -54,9 +59,9 @@ const ARCH_MAP = {
   'loongarch64-unknown-linux-gnu': 'loong64',
 }
 
-const arg1 = process.argv.slice(2)[0]
-const arg2 = process.argv.slice(2)[1]
-const target = arg1 === '--force' || arg1 === '-f' ? arg2 : arg1
+const target = CLI_ARGS.find(
+  (arg) => !['--force', '-f', '--service-only'].includes(arg),
+)
 const { platform, arch } = target
   ? { platform: PLATFORM_MAP[target], arch: ARCH_MAP[target] }
   : process
@@ -318,30 +323,109 @@ function clashMeta() {
 // =======================
 // download helper (增强：status + magic bytes)
 // =======================
-async function downloadFile(url, outPath) {
-  const options = {}
+function downloadBuffer(url, redirectsRemaining = 8) {
   const httpProxy =
     process.env.HTTP_PROXY ||
     process.env.http_proxy ||
     process.env.HTTPS_PROXY ||
     process.env.https_proxy
-  if (httpProxy) options.agent = new HttpsProxyAgent(httpProxy)
+  const parsed = new URL(url)
+  const transport = parsed.protocol === 'https:' ? https : http
+  const agent = httpProxy ? new HttpsProxyAgent(httpProxy) : undefined
 
-  const response = await fetch(url, {
-    ...options,
-    method: 'GET',
-    headers: { 'Content-Type': 'application/octet-stream' },
+  return new Promise((resolve, reject) => {
+    const request = transport.get(url, {
+      agent,
+      headers: {
+        Accept: 'application/octet-stream',
+        'User-Agent': 'clash-verge-privateproxy-build',
+      },
+    })
+    request.setTimeout(60_000, () => {
+      request.destroy(new Error(`Download timed out: ${url}`))
+    })
+    request.on('error', reject)
+    request.on('response', (response) => {
+      const location = response.headers.location
+      if (
+        location &&
+        [301, 302, 303, 307, 308].includes(response.statusCode ?? 0)
+      ) {
+        response.resume()
+        if (redirectsRemaining <= 0) {
+          reject(new Error(`Too many redirects while downloading ${url}`))
+          return
+        }
+        resolve(
+          downloadBuffer(
+            new URL(location, url).toString(),
+            redirectsRemaining - 1,
+          ),
+        )
+        return
+      }
+
+      const chunks = []
+      response.on('data', (chunk) => chunks.push(chunk))
+      response.on('error', reject)
+      response.on('end', () => {
+        const body = Buffer.concat(chunks)
+        if ((response.statusCode ?? 500) < 200 || response.statusCode >= 300) {
+          reject(
+            new Error(
+              `Failed to download ${url}: status ${response.statusCode}`,
+            ),
+          )
+          return
+        }
+        resolve(body)
+      })
+    })
   })
-  if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    // 将 body 写到文件以便排查（可通过临时目录查看）
-    await fsp.mkdir(path.dirname(outPath), { recursive: true })
-    await fsp.writeFile(outPath, body)
-    throw new Error(`Failed to download ${url}: status ${response.status}`)
-  }
+}
 
-  const buf = Buffer.from(await response.arrayBuffer())
+async function downloadFile(url, outPath) {
   await fsp.mkdir(path.dirname(outPath), { recursive: true })
+  let buf
+  try {
+    buf = await downloadBuffer(url)
+  } catch (directError) {
+    const releaseAsset = new URL(url).pathname.match(
+      /^\/([^/]+)\/([^/]+)\/releases\/download\/([^/]+)\/([^/]+)$/,
+    )
+    if (!releaseAsset) throw directError
+
+    const [, owner, repo, tag, encodedAsset] = releaseAsset
+    const asset = decodeURIComponent(encodedAsset)
+    log_info(
+      `Direct download failed (${directError.message}); retrying with GitHub CLI`,
+    )
+    try {
+      execFileSync(
+        'gh',
+        [
+          'release',
+          'download',
+          decodeURIComponent(tag),
+          '--repo',
+          `${owner}/${repo}`,
+          '--pattern',
+          asset,
+          '--output',
+          outPath,
+          '--clobber',
+        ],
+        { stdio: 'inherit' },
+      )
+      buf = await fsp.readFile(outPath)
+    } catch (ghError) {
+      throw new AggregateError(
+        [directError, ghError],
+        `Unable to download ${url} directly or through GitHub CLI`,
+        { cause: ghError },
+      )
+    }
+  }
 
   // 简单 magic 字节检查
   if (url.endsWith('.gz') || url.endsWith('.tgz')) {
@@ -577,8 +661,6 @@ const resolveServicePermission = async () => {
 // =======================
 // Other resource resolvers (service, mmdb, geosite, geoip, enableLoopback)
 // =======================
-const SERVICE_LATEST_URL =
-  'https://github.com/clash-verge-rev/clash-verge-service-ipc/releases/latest'
 const SERVICE_URL_PREFIX =
   'https://github.com/clash-verge-rev/clash-verge-service-ipc/releases/download'
 let SERVICE_VERSION
@@ -598,51 +680,25 @@ function serviceFileInfo(name) {
   }
 }
 
-function parseServiceVersionFromUrl(url) {
-  const match = url.match(/\/releases\/tag\/([^/?#]+)/)
-  return match ? decodeURIComponent(match[1]) : null
-}
-
 async function getLatestServiceVersion() {
-  if (!FORCE) {
-    const cached = await getCachedVersion('SERVICE_VERSION')
-    if (cached) {
-      SERVICE_VERSION = cached
-      return
-    }
+  const lockPath = path.join(cwd, 'Cargo.lock')
+  const lockText = await fsp.readFile(lockPath, 'utf8')
+  const packageBlock = lockText
+    .split('[[package]]')
+    .find((block) => /^name = "clash_verge_service_ipc"\s*$/m.test(block))
+  const version = packageBlock?.match(/^version = "([^"]+)"\s*$/m)?.[1]
+
+  if (!version) {
+    throw new Error(
+      'Unable to resolve clash_verge_service_ipc version from Cargo.lock',
+    )
   }
 
-  const options = {}
-  const httpProxy =
-    process.env.HTTP_PROXY ||
-    process.env.http_proxy ||
-    process.env.HTTPS_PROXY ||
-    process.env.https_proxy
-  if (httpProxy) options.agent = new HttpsProxyAgent(httpProxy)
-
-  try {
-    const response = await fetch(SERVICE_LATEST_URL, {
-      ...options,
-      method: 'GET',
-      redirect: 'follow',
-    })
-    if (!response.ok)
-      throw new Error(
-        `Failed to fetch ${SERVICE_LATEST_URL}: ${response.status}`,
-      )
-
-    SERVICE_VERSION = parseServiceVersionFromUrl(response.url)
-    if (!SERVICE_VERSION)
-      throw new Error(
-        `Unable to resolve service release tag from ${response.url}`,
-      )
-
-    log_info(`Latest service version: ${SERVICE_VERSION}`)
-    await setCachedVersion('SERVICE_VERSION', SERVICE_VERSION)
-  } catch (err) {
-    log_error('Error fetching latest service version:', err.message)
-    process.exit(1)
-  }
+  // The application and Windows service compare this version over IPC. Using
+  // "latest" here can create an endless reinstall loop when Cargo.lock is on
+  // another release, so always download the exact linked version.
+  SERVICE_VERSION = version.startsWith('v') ? version : `v${version}`
+  log_info(`Locked service version: ${SERVICE_VERSION}`)
 }
 
 async function findExtractedFile(dir, fileName) {
@@ -793,7 +849,7 @@ const tasks = [
     retry: 5,
     macosOnly: true,
   },
-]
+].filter((task) => !SERVICE_ONLY || task.name === 'service')
 
 async function runTask() {
   const task = tasks.shift()

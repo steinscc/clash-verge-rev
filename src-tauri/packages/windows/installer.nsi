@@ -617,16 +617,15 @@ FunctionEnd
 !macroend
 
 !macro StartVergeService
-  ; Check if the service exists
+  ; Only restart an existing service. Fresh installs stay in sidecar mode until
+  ; the user explicitly enables TUN and approves the one-time elevation.
   SimpleSC::ExistsService "clash_verge_service"
   Pop $0  ; 0: service exists; other: service not exists
-  ; Service exists
   ${If} $0 == 0
     Push $0
-    ; Check if the service is running
     SimpleSC::ServiceIsRunning "clash_verge_service"
-    Pop $0 ; returns an errorcode (<>0) otherwise success (0)
-    Pop $1 ; returns 1 (service is running) - returns 0 (service is not running)
+    Pop $0
+    Pop $1
     ${If} $0 == 0
       Push $0
       ${If} $1 == 0
@@ -643,22 +642,21 @@ FunctionEnd
 !macroend
 
 !macro RemoveVergeService
-  ; Check if the service exists
+  ; Remove through SCM from the already-elevated uninstaller. Do not launch a
+  ; second elevation helper, which can race the uninstall section.
   SimpleSC::ExistsService "clash_verge_service"
   Pop $0  ; 0: service exists; other: service not exists
-  ; Service exists
   ${If} $0 == 0
     Push $0
-    ; Check if the service is running
     SimpleSC::ServiceIsRunning "clash_verge_service"
-    Pop $0 ; returns an errorcode (<>0) otherwise success (0)
-    Pop $1 ; returns 1 (service is running) - returns 0 (service is not running)
+    Pop $0
+    Pop $1
     ${If} $0 == 0
       Push $0
       ${If} $1 == 1
         DetailPrint "Stop ${PRODUCTNAME} Service..."
         SimpleSC::StopService "clash_verge_service" 1 30
-        Pop $0 ; returns an errorcode (<>0) otherwise success (0)
+        Pop $0
         ${If} $0 == 0
           DetailPrint "Removing ${PRODUCTNAME} Service..."
           SimpleSC::RemoveService "clash_verge_service"

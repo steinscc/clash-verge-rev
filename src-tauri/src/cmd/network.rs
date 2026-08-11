@@ -1,11 +1,11 @@
 use super::CmdResult;
 use crate::cmd::StringifyErr as _;
 use crate::core::sysopt::Sysopt;
+use crate::utils::port;
 use clash_verge_logging::{Type, logging};
 use gethostname::gethostname;
 use network_interface::NetworkInterface;
 use serde_yaml_ng::Mapping;
-use std::net::TcpListener;
 use sysproxy::{Autoproxy, Sysproxy};
 use tauri_plugin_clash_verge_sysinfo;
 
@@ -102,5 +102,5 @@ pub fn get_network_interfaces_info() -> CmdResult<Vec<NetworkInterface>> {
 
 #[tauri::command]
 pub fn is_port_in_use(port: u16) -> bool {
-    TcpListener::bind(("127.0.0.1", port)).is_err()
+    !port::is_loopback_tcp_port_available(port)
 }
