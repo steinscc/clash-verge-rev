@@ -369,6 +369,34 @@ fn enforce_dns_ipv6(mut config: Mapping, dns_ipv6: Option<Value>) -> Mapping {
     config
 }
 
+fn has_privateproxy_proxy(config: &Mapping) -> bool {
+    let Some(Value::Sequence(proxies)) = config.get("proxies") else {
+        return false;
+    };
+
+    proxies.iter().any(|proxy| {
+        proxy
+            .as_mapping()
+            .and_then(|proxy| proxy.get("type"))
+            .and_then(Value::as_str)
+            == Some("privateproxy")
+    })
+}
+
+/// PrivateProxy currently runs IPv4-only; its presence overrides UI IPv6 values.
+fn enforce_privateproxy_ipv4(mut config: Mapping) -> Mapping {
+    if !has_privateproxy_proxy(&config) {
+        return config;
+    }
+
+    config.insert(Value::from("ipv6"), Value::from(false));
+    if let Some(Value::Mapping(dns)) = config.get_mut("dns") {
+        dns.insert(Value::from("ipv6"), Value::from(false));
+    }
+
+    config
+}
+
 fn is_loopback_bind_address(addr: &str) -> bool {
     let addr = addr.trim();
     let addr = addr
@@ -763,6 +791,7 @@ pub async fn enhance() -> Result<(Mapping, HashSet<String>, HashMap<String, Resu
     // 手动覆盖后恢复 app 权威字段。
     let config = enforce_control_plane(config, control_plane);
     let config = enforce_dns_ipv6(config, dns_ipv6);
+    let config = enforce_privateproxy_ipv4(config);
     let config = ensure_lan_bind_address(config);
 
     let config = cleanup_proxy_groups(config);
@@ -1006,6 +1035,48 @@ mod tests {
                 .and_then(|seq| seq.first())
                 .and_then(serde_yaml_ng::Value::as_str),
             Some("8.8.8.8")
+        );
+    }
+
+    #[test]
+    fn privateproxy_forces_ipv4_for_top_level_and_dns() {
+        let result = super::enforce_privateproxy_ipv4(mapping(
+            r#"{ipv6: true, dns: {ipv6: true, nameserver: ["1.1.1.1"]},
+               proxies: [{name: private, type: privateproxy}, {name: other, type: socks5}]}"#,
+        ));
+
+        assert_eq!(result.get("ipv6").and_then(serde_yaml_ng::Value::as_bool), Some(false));
+        assert_eq!(
+            result
+                .get("dns")
+                .and_then(|value| value.get("ipv6"))
+                .and_then(serde_yaml_ng::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            result
+                .get("dns")
+                .and_then(|value| value.get("nameserver"))
+                .and_then(serde_yaml_ng::Value::as_sequence)
+                .and_then(|seq| seq.first())
+                .and_then(serde_yaml_ng::Value::as_str),
+            Some("1.1.1.1")
+        );
+    }
+
+    #[test]
+    fn non_privateproxy_preserves_ipv6_values() {
+        let result = super::enforce_privateproxy_ipv4(mapping(
+            r#"{ipv6: true, dns: {ipv6: true}, proxies: [{name: other, type: socks5}]}"#,
+        ));
+
+        assert_eq!(result.get("ipv6").and_then(serde_yaml_ng::Value::as_bool), Some(true));
+        assert_eq!(
+            result
+                .get("dns")
+                .and_then(|value| value.get("ipv6"))
+                .and_then(serde_yaml_ng::Value::as_bool),
+            Some(true)
         );
     }
 
