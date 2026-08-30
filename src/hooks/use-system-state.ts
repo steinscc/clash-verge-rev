@@ -44,11 +44,11 @@ export function useSystemState() {
   } = useQuery({
     queryKey: ['getSystemState'],
     queryFn: async () => {
-      const [runningMode, isAdminMode, isServiceOk] = await Promise.all([
+      const [runningMode, isAdminMode] = await Promise.all([
         getRunningMode(),
         isAdmin(),
-        isServiceAvailable(),
       ])
+      const isServiceOk = isAdminMode ? false : await isServiceAvailable()
       return { runningMode, isAdminMode, isServiceOk } as SystemState
     },
     refetchInterval: pageVisible ? (isStartingUp ? 2000 : 30000) : false,

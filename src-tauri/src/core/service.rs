@@ -550,16 +550,21 @@ pub(super) async fn stop_core_by_service() -> Result<()> {
 }
 
 /// 检查服务是否正在运行
-pub async fn is_service_available() -> Result<()> {
-    if let Err(e) = Path::metadata(clash_verge_service_ipc::IPC_PATH.as_ref()) {
-        let verge = Config::verge().await;
-        let verge_last = verge.latest_arc();
-        let is_enable = verge_last.enable_tun_mode.unwrap_or(false);
-        if is_enable {
-            logging!(warn, Type::Service, "Some issue with service IPC Path: {}", e);
+fn check_service_ipc_path(path: &Path) -> std::io::Result<()> {
+    match path.metadata() {
+        Ok(_) => Ok(()),
+        // A missing IPC endpoint is the normal sidecar-mode state. Keep this
+        // as an unavailable result without emitting a warning on every poll.
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(err),
+        Err(err) => {
+            logging!(warn, Type::Service, "Service IPC path metadata failed: {}", err);
+            Err(err)
         }
-        return Err(e.into());
     }
+}
+
+pub async fn is_service_available() -> Result<()> {
+    check_service_ipc_path(Path::new(clash_verge_service_ipc::IPC_PATH))?;
     clash_verge_service_ipc::connect().await?;
     Ok(())
 }
@@ -725,6 +730,14 @@ pub static SERVICE_MANAGER: Lazy<ServiceManager> = Lazy::new(|| ServiceManager {
 #[cfg(test)]
 mod background_refresh_tests {
     use super::*;
+
+    #[test]
+    fn missing_service_ipc_path_is_unavailable() {
+        let path = std::env::temp_dir().join(format!("clash-verge-service-missing-ipc-{}", std::process::id()));
+
+        let err = check_service_ipc_path(&path).expect_err("missing IPC path must be unavailable");
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
 
     #[test]
     fn matching_service_is_ready() -> Result<()> {
