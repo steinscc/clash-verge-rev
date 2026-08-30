@@ -430,6 +430,10 @@ impl SilentUpdater {
 
 // ─── Background Check and Download ───────────────────────────────────────────
 
+fn auto_check_update_enabled(configured: Option<bool>) -> bool {
+    configured.unwrap_or(false)
+}
+
 impl SilentUpdater {
     async fn check_and_download(&self, app_handle: &tauri::AppHandle) -> Result<()> {
         let is_portable = *dirs::PORTABLE_FLAG.get().unwrap_or(&false);
@@ -438,7 +442,7 @@ impl SilentUpdater {
             return Ok(());
         }
 
-        let auto_check = Config::verge().await.latest_arc().auto_check_update.unwrap_or(true);
+        let auto_check = auto_check_update_enabled(Config::verge().await.latest_arc().auto_check_update);
         if !auto_check {
             logging!(debug, Type::System, "Silent update skipped: auto_check_update is false");
             return Ok(());
@@ -536,6 +540,13 @@ mod tests {
     use super::*;
 
     // ─── version_lte tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn custom_distribution_updates_are_opt_in() {
+        assert!(!auto_check_update_enabled(None));
+        assert!(!auto_check_update_enabled(Some(false)));
+        assert!(auto_check_update_enabled(Some(true)));
+    }
 
     #[test]
     fn test_version_equal() {
