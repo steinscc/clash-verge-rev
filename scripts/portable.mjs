@@ -1,7 +1,7 @@
-import fs from 'fs'
-import fsp from 'fs/promises'
-import { createRequire } from 'module'
-import path from 'path'
+import fs from 'node:fs'
+import fsp from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import path from 'node:path'
 
 import AdmZip from 'adm-zip'
 
@@ -21,14 +21,16 @@ const arch = target ? ARCH_MAP[target] : PROCESS_MAP[process.arch]
 async function resolvePortable() {
   if (process.platform !== 'win32') return
 
-  const releaseDir = target
-    ? `./src-tauri/target/${target}/release`
-    : `./src-tauri/target/release`
-  const configDir = path.join(releaseDir, '.config')
-
-  if (!fs.existsSync(releaseDir)) {
-    throw new Error('could not found the release dir')
+  const releaseCandidates = target
+    ? [`./target/${target}/release`, `./src-tauri/target/${target}/release`]
+    : ['./target/release', './src-tauri/target/release']
+  const releaseDir = releaseCandidates.find((dir) => fs.existsSync(dir))
+  if (!releaseDir) {
+    throw new Error(
+      `could not find the release dir (checked: ${releaseCandidates.join(', ')})`,
+    )
   }
+  const configDir = path.join(releaseDir, '.config')
 
   await fsp.mkdir(configDir, { recursive: true })
   if (!fs.existsSync(path.join(configDir, 'PORTABLE'))) {
@@ -50,4 +52,7 @@ async function resolvePortable() {
   console.log('[INFO]: create portable zip successfully')
 }
 
-resolvePortable().catch(console.error)
+resolvePortable().catch((error) => {
+  console.error(error)
+  process.exitCode = 1
+})

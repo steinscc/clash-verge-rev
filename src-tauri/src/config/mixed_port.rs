@@ -18,7 +18,7 @@ use super::Config;
 use crate::core::handle::Handle;
 
 /// The port mihomo listens on when nothing else is configured.
-pub const DEFAULT_MIXED_PORT: u16 = 7897;
+pub const DEFAULT_MIXED_PORT: u16 = crate::constants::network::ports::DEFAULT_MIXED;
 
 /// Resolving the Mixed Port.
 pub struct MixedPort;
