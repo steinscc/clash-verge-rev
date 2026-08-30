@@ -1319,7 +1319,7 @@ mod tests {
     #[test]
     fn non_privateproxy_preserves_ipv6_values() {
         let result = super::enforce_privateproxy_ipv4(mapping(
-            r#"{ipv6: true, dns: {ipv6: true}, proxies: [{name: other, type: socks5}]}"#,
+            r"{ipv6: true, dns: {ipv6: true}, proxies: [{name: other, type: socks5}]}",
         ));
 
         assert_eq!(result.get("ipv6").and_then(serde_yaml_ng::Value::as_bool), Some(true));

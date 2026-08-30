@@ -73,6 +73,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::{MIN_FALLBACK_PORT, choose_available_mixed_port_with, find_next_available_port};
     use std::collections::HashSet;
