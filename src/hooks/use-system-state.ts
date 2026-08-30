@@ -48,7 +48,10 @@ export function useSystemState() {
         getRunningMode(),
         isAdmin(),
       ])
-      const isServiceOk = isAdminMode ? false : await isServiceAvailable()
+      const isServiceOk =
+        isAdminMode && runningMode === 'Sidecar'
+          ? false
+          : await isServiceAvailable()
       return { runningMode, isAdminMode, isServiceOk } as SystemState
     },
     refetchInterval: pageVisible ? (isStartingUp ? 2000 : 30000) : false,
