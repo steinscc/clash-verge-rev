@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::{
     config::{DEFAULT_PAC, deserialize_encrypted, serialize_encrypted},
     constants::network::ports::DEFAULT_MIXED,
-    utils::{dirs, help, port},
+    utils::{dirs, help},
 };
 use anyhow::Result;
 use clash_verge_logging::{Type, logging};
@@ -318,31 +318,6 @@ impl IVerge {
             );
             config.clash_core = Some("verge-mihomo".into());
             needs_fix = true;
-        }
-
-        let requested_mixed_port = config.verge_mixed_port.unwrap_or(DEFAULT_MIXED);
-        match port::choose_available_mixed_port(requested_mixed_port) {
-            Ok(available_port) if available_port != requested_mixed_port => {
-                logging!(
-                    warn,
-                    Type::Config,
-                    "Mixed proxy port {} is unavailable; migrating to available loopback port {}",
-                    requested_mixed_port,
-                    available_port
-                );
-                config.verge_mixed_port = Some(available_port);
-                needs_fix = true;
-            }
-            Ok(_) => {}
-            Err(err) => {
-                logging!(
-                    error,
-                    Type::Config,
-                    "Failed to find an available mixed proxy port after {} was unavailable: {}",
-                    requested_mixed_port,
-                    err
-                );
-            }
         }
 
         // 修正后保存配置
